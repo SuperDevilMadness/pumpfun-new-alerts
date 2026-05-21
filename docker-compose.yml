@@ -4,7 +4,7 @@ services:
     container_name: pumpfun-unique-name-ticker-alerts
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3001:3000"
     volumes:
       - pumpfun_unique_data:/data
     environment:
