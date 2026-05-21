@@ -92,7 +92,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 threading.Thread(
-    target=lambda: HTTPServer(("0.0.0.0", 3000), HealthHandler).serve_forever(),
+    target=lambda: HTTPServer(("0.0.0.0", 3001), HealthHandler).serve_forever(),
     daemon=True,
 ).start()
 
