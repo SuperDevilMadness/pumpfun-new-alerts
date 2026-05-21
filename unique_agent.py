@@ -9,7 +9,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import requests
 import websocket
 
-
 BOT = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT = str(os.getenv("TELEGRAM_CHAT_ID"))
 COOLDOWN_DAYS = int(os.getenv("COOLDOWN_DAYS") or "60")
@@ -31,7 +30,7 @@ last_alert = "None yet"
 
 
 def n():
-    return chr(10)
+    return "\n"
 
 
 def esc(value):
@@ -54,7 +53,7 @@ def uptime():
 def money(value):
     try:
         return "$" + format(float(value), ",.0f")
-    except Exception:
+    except:
         return "Unknown"
 
 
@@ -63,7 +62,7 @@ def load_db():
     try:
         with open(DATA_FILE, "r") as file:
             db = json.load(file)
-    except Exception:
+    except:
         db = {"names": {}, "tickers": {}}
 
 
@@ -77,8 +76,14 @@ def save_db():
 
 def cleanup_old_entries():
     cutoff = time.time() - COOLDOWN_SECONDS
-    db["names"] = {key: value for key, value in db.get("names", {}).items() if value >= cutoff}
-    db["tickers"] = {key: value for key, value in db.get("tickers", {}).items() if value >= cutoff}
+    db["names"] = {
+        key: value for key, value in db.get("names", {}).items()
+        if value >= cutoff
+    }
+    db["tickers"] = {
+        key: value for key, value in db.get("tickers", {}).items()
+        if value >= cutoff
+    }
     save_db()
 
 
@@ -86,7 +91,7 @@ def load_offset():
     try:
         with open(OFFSET_FILE, "r") as file:
             return int(json.load(file).get("offset", 0))
-    except Exception:
+    except:
         return 0
 
 
@@ -96,6 +101,28 @@ def save_offset(offset):
             json.dump({"offset": offset}, file)
     except Exception as error:
         print("save offset error", error, flush=True)
+
+
+def drain_old_updates():
+    try:
+        response = requests.get(
+            f"https://api.telegram.org/bot{BOT}/getUpdates",
+            params={"timeout": 0},
+            timeout=10,
+        )
+
+        updates = response.json().get("result", [])
+
+        if updates:
+            newest_offset = updates[-1]["update_id"] + 1
+            save_offset(newest_offset)
+            print("drained old telegram updates", newest_offset, flush=True)
+            return newest_offset
+
+    except Exception as error:
+        print("drain telegram error", error, flush=True)
+
+    return load_offset()
 
 
 load_db()
@@ -149,12 +176,18 @@ def send_alert(coin, mint):
     )
 
     url = f"https://api.telegram.org/bot{BOT}/" + ("sendPhoto" if image else "sendMessage")
-    payload = {"chat_id": CHAT, "parse_mode": "HTML"}
+
+    payload = {
+        "chat_id": CHAT,
+        "parse_mode": "HTML",
+    }
 
     if image:
-        payload.update({"photo": image, "caption": caption})
+        payload["photo"] = image
+        payload["caption"] = caption
     else:
-        payload.update({"text": caption, "disable_web_page_preview": False})
+        payload["text"] = caption
+        payload["disable_web_page_preview"] = False
 
     try:
         requests.post(url, json=payload, timeout=10)
@@ -178,7 +211,7 @@ def fetch_coin(mint):
 
 
 def check_coin(mint):
-    global tokens_seen, last_coin
+    global last_coin
 
     time.sleep(2)
 
@@ -188,6 +221,7 @@ def check_coin(mint):
 
     name_raw = coin.get("name", "")
     symbol_raw = coin.get("symbol", "")
+
     name = normalize(name_raw)
     symbol = normalize(symbol_raw)
 
@@ -196,20 +230,19 @@ def check_coin(mint):
 
     cleanup_old_entries()
 
-    name_seen = bool(name and name in db["names"])
-    symbol_seen = bool(symbol and symbol in db["tickers"])
-
-    if name_seen or symbol_seen:
-        print(f"suppressed duplicate/cooldown: {name} / {symbol}", flush=True)
+    if (name and name in db["names"]) or (symbol and symbol in db["tickers"]):
+        print("duplicate suppressed", name, symbol, flush=True)
         return
 
     timestamp = time.time()
+
     if name:
         db["names"][name] = timestamp
+
     if symbol:
         db["tickers"][symbol] = timestamp
-    save_db()
 
+    save_db()
     send_alert(coin, mint)
 
 
@@ -218,12 +251,12 @@ def status_text():
 
     return (
         "✅ <b>Unique Agent Status</b>" + n() + n()
-        + "🔌 <b>Websocket:</b> " + ("connected" if ws_connected else "not connected") + n()
+        + "🔌 <b>Websocket:</b> " + ("connected" if ws_connected else "disconnected") + n()
         + "⏱ <b>Uptime:</b> " + uptime() + n()
         + "👀 <b>Tokens scanned:</b> " + str(tokens_seen) + n()
         + "🚨 <b>Alerts sent:</b> " + str(alerts_sent) + n()
-        + "📛 <b>Names on cooldown:</b> " + str(len(db.get("names", {}))) + n()
-        + "🏷 <b>Tickers on cooldown:</b> " + str(len(db.get("tickers", {}))) + n() + n()
+        + "📛 <b>Names on cooldown:</b> " + str(len(db["names"])) + n()
+        + "🏷 <b>Tickers on cooldown:</b> " + str(len(db["tickers"])) + n() + n()
         + "🪙 <b>Last coin:</b>" + n() + "<code>" + esc(last_coin) + "</code>" + n() + n()
         + "📣 <b>Last alert:</b> " + esc(last_alert) + n()
         + "🕒 <b>Checked:</b> " + now_utc()
@@ -231,17 +264,22 @@ def status_text():
 
 
 def command_loop():
-    offset = load_offset()
+    offset = drain_old_updates()
 
     while True:
         try:
             response = requests.get(
                 f"https://api.telegram.org/bot{BOT}/getUpdates",
-                params={"timeout": 25, "offset": offset},
+                params={
+                    "timeout": 25,
+                    "offset": offset
+                },
                 timeout=30,
             )
 
-            for update in response.json().get("result", []):
+            updates = response.json().get("result", [])
+
+            for update in updates:
                 offset = update["update_id"] + 1
                 save_offset(offset)
 
@@ -255,19 +293,20 @@ def command_loop():
                 if text in ["/status", "status", "/ping", "ping"]:
                     send_message(status_text())
 
-                elif text in ["/restart", "restart"]:
-                    send_message("♻️ Restarting unique agent now...")
-                    time.sleep(1)
-                    os._exit(0)
-
                 elif text in ["/help", "help"]:
                     send_message(
                         "🤖 <b>Commands</b>" + n() + n()
                         + "/status - health check" + n()
-                        + "/ping - same as status" + n()
-                        + "/restart - restart the bot" + n()
+                        + "/ping - health check" + n()
+                        + "/restart - restart bot" + n()
                         + "/help - show commands"
                     )
+
+                elif text in ["/restart", "restart"]:
+                    save_offset(offset)
+                    send_message("♻️ Restarting unique agent now...")
+                    time.sleep(1)
+                    os._exit(0)
 
         except Exception as error:
             print("command error", error, flush=True)
@@ -277,22 +316,20 @@ def command_loop():
 def heartbeat_loop():
     while True:
         time.sleep(HEARTBEAT_MINUTES * 60)
-        send_message("🟢 <b>Regular Unique Agent Checkup</b>" + n() + n() + status_text())
+        send_message("🟢 <b>Scheduled Checkup</b>" + n() + n() + status_text())
 
 
 def on_open(ws):
     global ws_connected
-
     ws_connected = True
-    print("connected", flush=True)
+    print("websocket connected", flush=True)
     ws.send(json.dumps({"method": "subscribeNewToken"}))
 
 
 def on_close(ws, *args):
     global ws_connected
-
     ws_connected = False
-    print("closed", flush=True)
+    print("websocket disconnected", flush=True)
 
 
 def on_message(ws, message):
@@ -300,9 +337,13 @@ def on_message(ws, message):
 
     try:
         event = json.loads(message)
+
         mint = event.get("mint") or event.get("mintAddress") or event.get("ca")
 
-        if not mint or mint in seen_mints:
+        if not mint:
+            return
+
+        if mint in seen_mints:
             return
 
         seen_mints.add(mint)
@@ -319,14 +360,16 @@ threading.Thread(target=command_loop, daemon=True).start()
 threading.Thread(target=heartbeat_loop, daemon=True).start()
 
 while True:
-    print("connecting", flush=True)
+    try:
+        websocket.WebSocketApp(
+            "wss://pumpportal.fun/api/data",
+            on_open=on_open,
+            on_message=on_message,
+            on_close=on_close,
+        ).run_forever()
 
-    websocket.WebSocketApp(
-        "wss://pumpportal.fun/api/data",
-        on_open=on_open,
-        on_message=on_message,
-        on_close=on_close,
-    ).run_forever()
+    except Exception as error:
+        print("websocket crash", error, flush=True)
 
-    print("reconnecting", flush=True)
+    print("reconnecting websocket in 5 sec", flush=True)
     time.sleep(5)
