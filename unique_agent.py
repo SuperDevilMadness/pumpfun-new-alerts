@@ -15,7 +15,9 @@ CHAT = str(os.getenv("TELEGRAM_CHAT_ID"))
 COOLDOWN_DAYS = int(os.getenv("COOLDOWN_DAYS") or "60")
 COOLDOWN_SECONDS = COOLDOWN_DAYS * 86400
 HEARTBEAT_MINUTES = int(os.getenv("HEARTBEAT_MINUTES") or "60")
+
 DATA_FILE = "/data/seen_names_tickers.json"
+OFFSET_FILE = "/data/telegram_offset.json"
 
 seen_mints = set()
 db = {"names": {}, "tickers": {}}
@@ -80,6 +82,22 @@ def cleanup_old_entries():
     save_db()
 
 
+def load_offset():
+    try:
+        with open(OFFSET_FILE, "r") as file:
+            return int(json.load(file).get("offset", 0))
+    except Exception:
+        return 0
+
+
+def save_offset(offset):
+    try:
+        with open(OFFSET_FILE, "w") as file:
+            json.dump({"offset": offset}, file)
+    except Exception as error:
+        print("save offset error", error, flush=True)
+
+
 load_db()
 cleanup_old_entries()
 
@@ -113,7 +131,7 @@ def send_message(text):
         print("telegram message error", error, flush=True)
 
 
-def send_alert(coin, mint, reason):
+def send_alert(coin, mint):
     global alerts_sent, last_alert
 
     name = coin.get("name", "Unknown")
@@ -122,8 +140,7 @@ def send_alert(coin, mint, reason):
     pump_link = f"https://pump.fun/coin/{mint}"
 
     caption = (
-        "🆕 <b>Unique Pump.fun Name/Ticker Alert</b>" + n() + n()
-        + "🧠 <b>Reason:</b> " + esc(reason) + n()
+        "🆕 <b>New Name/Ticker Found</b>" + n() + n()
         + "🪙 <b>Name:</b> " + esc(name) + n()
         + "🏷 <b>Ticker:</b> " + esc(symbol) + n()
         + "💰 <b>Market Cap:</b> " + money(coin.get("usd_market_cap")) + n() + n()
@@ -186,12 +203,6 @@ def check_coin(mint):
         print(f"suppressed duplicate/cooldown: {name} / {symbol}", flush=True)
         return
 
-    reason = "name and ticker have not alerted in cooldown"
-    if name and not symbol:
-        reason = "name has not alerted in cooldown"
-    elif symbol and not name:
-        reason = "ticker has not alerted in cooldown"
-
     timestamp = time.time()
     if name:
         db["names"][name] = timestamp
@@ -199,10 +210,12 @@ def check_coin(mint):
         db["tickers"][symbol] = timestamp
     save_db()
 
-    send_alert(coin, mint, reason)
+    send_alert(coin, mint)
 
 
 def status_text():
+    cleanup_old_entries()
+
     return (
         "✅ <b>Unique Agent Status</b>" + n() + n()
         + "🔌 <b>Websocket:</b> " + ("connected" if ws_connected else "not connected") + n()
@@ -218,7 +231,7 @@ def status_text():
 
 
 def command_loop():
-    offset = 0
+    offset = load_offset()
 
     while True:
         try:
@@ -230,6 +243,8 @@ def command_loop():
 
             for update in response.json().get("result", []):
                 offset = update["update_id"] + 1
+                save_offset(offset)
+
                 message = update.get("message", {})
                 chat_id = str(message.get("chat", {}).get("id", ""))
                 text = (message.get("text") or "").strip().lower()
