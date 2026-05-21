@@ -1,1 +1,17 @@
+services:
+  pumpfun-unique-name-ticker-alerts:
+    build: .
+    container_name: pumpfun-unique-name-ticker-alerts
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - pumpfun_unique_data:/data
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      COOLDOWN_DAYS: ${COOLDOWN_DAYS}
+      HEARTBEAT_MINUTES: ${HEARTBEAT_MINUTES}
 
+volumes:
+  pumpfun_unique_data:
